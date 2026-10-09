@@ -13,3 +13,15 @@ def test_settings_custom_values(monkeypatch):
     assert settings.mcp_api_key == "test-secret-key-12345"
     assert settings.aws_s3_bucket == "buzzomni-media-inventory"
     assert settings.aws_s3_region == "ap-south-1"
+
+
+def test_cli_main_argparse(monkeypatch):
+    from unittest.mock import patch
+    from mcp_server.__main__ import main
+
+    monkeypatch.setattr("sys.argv", ["mcp_server", "--transport", "stdio"])
+    with patch("mcp_server.__main__.create_mcp_server") as mock_srv_cls:
+        mock_srv = mock_srv_cls.return_value
+        main()
+        mock_srv.run.assert_called_once_with(transport="stdio")
+
