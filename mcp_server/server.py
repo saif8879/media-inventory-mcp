@@ -23,9 +23,16 @@ def create_mcp_server() -> MCPServer:
 
 
 def create_app() -> FastAPI:
-    """Create the FastAPI application hosting the MCP server and SSE transport."""
+    """Create the FastAPI application hosting the MCP server and HTTP transports."""
     settings = get_settings()
     server = create_mcp_server()
+    # Pass the real bind host. The SDK otherwise assumes 127.0.0.1 and rejects
+    # the public Host header with 421.
+    streamable_app = server.streamable_http_app(
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        host=settings.mcp_server_host,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -33,7 +40,8 @@ def create_app() -> FastAPI:
             "media_inventory_mcp_server_starting",
             extra={"port": settings.mcp_server_port, "host": settings.mcp_server_host},
         )
-        yield
+        async with server.session_manager.run():
+            yield
         logger.info("media_inventory_mcp_server_stopped")
 
     app = FastAPI(
@@ -73,9 +81,12 @@ def create_app() -> FastAPI:
             ],
         }
 
-    # Add Starlette SSE routes directly (/sse and /messages) so other routes are not shadowed
-    sse_starlette_app = server.sse_app()
+    # SSE stays available for older clients. Streamable HTTP on /mcp is what
+    # Claude custom connectors call with POST.
+    sse_starlette_app = server.sse_app(host=settings.mcp_server_host)
     for route in sse_starlette_app.routes:
+        app.router.routes.append(route)
+    for route in streamable_app.routes:
         app.router.routes.append(route)
 
     return app
