@@ -276,6 +276,23 @@ bash deploy/deploy.sh
 ## 7. AI Client Configuration Examples
 
 ### Claude Desktop (`claude_desktop_config.json`)
+
+**Option A: Direct stdio (Recommended — Local Python Environment)**
+```json
+{
+  "mcpServers": {
+    "media-inventory": {
+      "command": "/Users/saifidrisi/Documents/media-in-mcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_server"
+      ]
+    }
+  }
+}
+```
+
+**Option B: Remote / Local SSE Transport**
 ```json
 {
   "mcpServers": {
@@ -291,7 +308,8 @@ bash deploy/deploy.sh
 }
 ```
 
-Or when running locally via python stdio bridge or direct SSE client.
+> **NeuroAI Media Planner System Prompt for Claude**:
+> See [`prompts/neuroai_media_planner_system_prompt.md`](prompts/neuroai_media_planner_system_prompt.md) for full instructions to configure Claude as a conversational OOH Media Planner that digests campaign briefs, evaluates AdMavin metrics, and generates presentations.
 
 ### Cursor IDE MCP Configuration
 Add to `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
