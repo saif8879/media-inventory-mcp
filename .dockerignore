@@ -1,0 +1,31 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.DS_Store
+*.DS_Store
+
+# Virtual environments and caches
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Local export files and transient data
+exports/*.pptx
+!exports/.gitkeep
+deliverables
+.superpowers
+
+# Test artifacts and local specs
+tests
+docs
+prompts
+pytest.ini

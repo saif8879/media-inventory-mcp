@@ -1,0 +1,23 @@
+services:
+  media-inventory-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: media-inventory-mcp:latest
+    container_name: media-inventory-mcp
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    env_file:
+      - .env
+    environment:
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=8090
+    volumes:
+      - ./exports:/app/exports
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

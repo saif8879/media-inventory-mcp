@@ -237,16 +237,49 @@ curl http://localhost:8090/health
 
 ---
 
-## 6. Production Deployment Instructions (Ubuntu)
+## 6. Production Deployment Instructions
+
+### Option A: Docker Container (Recommended)
+
+1. **Configure Environment**:
+   ```bash
+   cp .env.example .env
+   # Ensure DATABASE_URL, MCP_API_KEY, and AWS credentials are set
+   ```
+
+2. **Build and Start with Docker Compose**:
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Check Container Status and Health**:
+   ```bash
+   docker compose ps
+   curl http://localhost:8090/health
+   ```
+
+4. **View Container Logs**:
+   ```bash
+   docker compose logs -f
+   ```
+
+5. **Stop Container**:
+   ```bash
+   docker compose down
+   ```
+
+---
+
+### Option B: Native Ubuntu Systemd Service
 
 The repository includes a ready-to-use systemd unit file and deployment script under `deploy/`.
 
-### Automated Deployment
+#### Automated Deployment
 ```bash
 bash deploy/deploy.sh
 ```
 
-### Manual Deployment Steps
+#### Manual Deployment Steps
 1. Create application directory:
    ```bash
    sudo mkdir -p /documents/media-inventory/mcp
