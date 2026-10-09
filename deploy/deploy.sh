@@ -9,9 +9,21 @@ echo "=== Deploying Media Inventory MCP Server ==="
 
 # 1. Ensure target directory exists
 mkdir -p "${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}/exports"
 
-# 2. Copy application files
-rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' --exclude='.env' ./ "${INSTALL_DIR}/"
+# 2. Copy application files (excluding development and local scratch artifacts)
+rsync -av \
+    --exclude='.git' \
+    --exclude='.venv' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='.pytest_cache' \
+    --exclude='.env' \
+    --exclude='.superpowers' \
+    --exclude='deliverables' \
+    --exclude='exports/*.pptx' \
+    --exclude='.DS_Store' \
+    ./ "${INSTALL_DIR}/"
 
 # 3. Ensure virtual environment exists
 if [ ! -d "${INSTALL_DIR}/.venv" ]; then

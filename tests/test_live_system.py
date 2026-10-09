@@ -108,15 +108,23 @@ async def test_live_system_verification():
     assert os.path.exists(deck_data["local_file_path"])
     assert deck_data["local_file_path"].endswith(".pptx")
 
-    # Verify PPTX file using python-pptx (slides count == 3: Cover, Site, Closing)
-    prs = Presentation(deck_data["local_file_path"])
-    assert len(prs.slides) == 3
+    try:
+        # Verify PPTX file using python-pptx (slides count == 3: Cover, Site, Closing)
+        prs = Presentation(deck_data["local_file_path"])
+        assert len(prs.slides) == 3
 
-    # Verify S3 presigned download URL is returned and active
-    assert deck_data["s3_download_url"] is not None
-    assert deck_data["s3_download_url"].startswith("http")
+        # Verify S3 presigned download URL is returned and active
+        assert deck_data["s3_download_url"] is not None
+        assert deck_data["s3_download_url"].startswith("http")
 
-    async with AsyncClient() as http_client:
-        s3_res = await http_client.get(deck_data["s3_download_url"])
-        assert s3_res.status_code == 200
-        assert len(s3_res.content) > 0
+        async with AsyncClient() as http_client:
+            s3_res = await http_client.get(deck_data["s3_download_url"])
+            assert s3_res.status_code == 200
+            assert len(s3_res.content) > 0
+    finally:
+        # Clean up local test file artifact
+        if os.path.exists(deck_data.get("local_file_path", "")):
+            try:
+                os.unlink(deck_data["local_file_path"])
+            except OSError:
+                pass

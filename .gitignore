@@ -3,5 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
-exports/
+exports/*
+!exports/.gitkeep
 *.pptx
+deliverables/
+.superpowers/
+.DS_Store
+*.DS_Store
