@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 import urllib.parse
+import uuid
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -91,6 +92,37 @@ def format_number(val: int | float | None) -> str:
         return f"{int(val):,}"
     except Exception:
         return str(val)
+
+
+def _add_para(
+    tf: Any,
+    text: str,
+    font_size_pt: float,
+    bold: bool = False,
+    color_rgb: RGBColor | None = None,
+    space_after_pt: float = 0,
+    alignment: Any = None,
+) -> Any:
+    """Create or populate a paragraph in a text frame and apply font attributes directly to a Run."""
+    if len(tf.paragraphs) == 1 and not tf.paragraphs[0].text and not tf.paragraphs[0].runs:
+        p = tf.paragraphs[0]
+    else:
+        p = tf.add_paragraph()
+
+    if alignment is not None:
+        p.alignment = alignment
+    if space_after_pt:
+        p.space_after = Pt(space_after_pt)
+
+    run = p.add_run()
+    run.text = text
+    run.font.name = "Arial"
+    run.font.size = Pt(font_size_pt)
+    run.font.bold = bold
+    if color_rgb is not None:
+        run.font.color.rgb = color_rgb
+
+    return p
 
 
 class DeckBuilderService:
@@ -178,8 +210,20 @@ class DeckBuilderService:
 
             if raw_bytes:
                 with Image.open(io.BytesIO(raw_bytes)) as img:
+                    img = img.convert("RGB")
                     w, h = img.size
-                return io.BytesIO(raw_bytes), (w, h)
+                    max_edge = max(w, h)
+                    if max_edge > 2000:
+                        scale = 2000.0 / max_edge
+                        new_w = max(1, int(round(w * scale)))
+                        new_h = max(1, int(round(h * scale)))
+                        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        w, h = new_w, new_h
+
+                    out_buf = io.BytesIO()
+                    img.save(out_buf, format="JPEG", quality=85)
+                    out_buf.seek(0)
+                    return out_buf, (w, h)
         except Exception as exc:
             logger.warning(
                 "failed_to_fetch_image_for_deck",
@@ -298,28 +342,31 @@ class DeckBuilderService:
         tf = tb.text_frame
         tf.word_wrap = True
 
-        p_kicker = tf.paragraphs[0]
-        p_kicker.text = "CAMPAIGN PROPOSAL & MEDIA PLAN"
-        p_kicker.font.name = "Arial"
-        p_kicker.font.size = Pt(11)
-        p_kicker.font.bold = True
-        p_kicker.font.color.rgb = theme.accent_color
-        p_kicker.space_after = Pt(14)
-
-        p_title = tf.add_paragraph()
-        p_title.text = campaign_title
-        p_title.font.name = "Arial"
-        p_title.font.size = Pt(38)
-        p_title.font.bold = True
-        p_title.font.color.rgb = theme.text_primary
-        p_title.space_after = Pt(12)
+        _add_para(
+            tf,
+            "CAMPAIGN PROPOSAL & MEDIA PLAN",
+            font_size_pt=11,
+            bold=True,
+            color_rgb=theme.accent_color,
+            space_after_pt=14,
+        )
+        _add_para(
+            tf,
+            campaign_title,
+            font_size_pt=38,
+            bold=True,
+            color_rgb=theme.text_primary,
+            space_after_pt=12,
+        )
 
         if client_name.strip():
-            p_sub = tf.add_paragraph()
-            p_sub.text = f"Prepared for: {client_name.strip()}"
-            p_sub.font.name = "Arial"
-            p_sub.font.size = Pt(18)
-            p_sub.font.color.rgb = theme.text_muted
+            _add_para(
+                tf,
+                f"Prepared for: {client_name.strip()}",
+                font_size_pt=18,
+                bold=False,
+                color_rgb=theme.text_muted,
+            )
 
         # Bottom metadata badge
         meta_tb = slide.shapes.add_textbox(
@@ -332,19 +379,21 @@ class DeckBuilderService:
         if len(cities) > 5:
             cities_str += f" +{len(cities) - 5} more"
 
-        p_badge = meta_tf.paragraphs[0]
-        p_badge.text = f"✦  {site_count} Selected OOH Sites    |    {cities_str}"
-        p_badge.font.name = "Arial"
-        p_badge.font.size = Pt(13)
-        p_badge.font.bold = True
-        p_badge.font.color.rgb = theme.text_primary
-        p_badge.space_after = Pt(6)
-
-        p_footer = meta_tf.add_paragraph()
-        p_footer.text = f"BuzzOmni Media Inventory  •  Generated {datetime.now().strftime('%B %Y')}"
-        p_footer.font.name = "Arial"
-        p_footer.font.size = Pt(11)
-        p_footer.font.color.rgb = theme.text_muted
+        _add_para(
+            meta_tf,
+            f"✦  {site_count} Selected OOH Sites    |    {cities_str}",
+            font_size_pt=13,
+            bold=True,
+            color_rgb=theme.text_primary,
+            space_after_pt=6,
+        )
+        _add_para(
+            meta_tf,
+            f"BuzzOmni Media Inventory  •  Generated {datetime.now().strftime('%B %Y')}",
+            font_size_pt=11,
+            bold=False,
+            color_rgb=theme.text_muted,
+        )
 
     def _add_site_slide(
         self,
@@ -376,27 +425,42 @@ class DeckBuilderService:
         photo_box.line.color.rgb = theme.border_color
         photo_box.line.width = Pt(1)
 
+        picture_added = False
         if img_stream is not None and img_dims is not None:
-            fit_x, fit_y, fit_w, fit_h = self.compute_contain_fit(
-                img_dims[0], img_dims[1], box_x, box_y, box_w, box_h
-            )
-            slide.shapes.add_picture(
-                img_stream,
-                Inches(fit_x),
-                Inches(fit_y),
-                Inches(fit_w),
-                Inches(fit_h),
-            )
-        else:
+            try:
+                fit_x, fit_y, fit_w, fit_h = self.compute_contain_fit(
+                    img_dims[0], img_dims[1], box_x, box_y, box_w, box_h
+                )
+                slide.shapes.add_picture(
+                    img_stream,
+                    Inches(fit_x),
+                    Inches(fit_y),
+                    Inches(fit_w),
+                    Inches(fit_h),
+                )
+                picture_added = True
+            except Exception as exc:
+                logger.warning(
+                    "corrupt_or_unsupported_image_embed_failed",
+                    extra={
+                        "error": str(exc),
+                        "site_id": site.get("id"),
+                        "inventory_code": site.get("inventory_code"),
+                    },
+                )
+                picture_added = False
+
+        if not picture_added:
             tf_box = photo_box.text_frame
             tf_box.word_wrap = True
-            p_fallback = tf_box.paragraphs[0]
-            p_fallback.text = "Site Photo Pending / Unavailable"
-            p_fallback.alignment = PP_ALIGN.CENTER
-            p_fallback.font.name = "Arial"
-            p_fallback.font.size = Pt(14)
-            p_fallback.font.bold = True
-            p_fallback.font.color.rgb = theme.text_muted
+            _add_para(
+                tf_box,
+                "Site Photo Pending / Unavailable",
+                font_size_pt=14,
+                bold=True,
+                color_rgb=theme.text_muted,
+                alignment=PP_ALIGN.CENTER,
+            )
 
         # 38% Spec Panel (3.95" x 6.20" at x=8.8", y=0.65")
         card_x, card_y, card_w, card_h = 8.8, 0.65, 3.95, 6.20
@@ -426,59 +490,67 @@ class DeckBuilderService:
         tf_spec.margin_bottom = Inches(0.05)
 
         # 1. Kicker
-        p_kicker = tf_spec.paragraphs[0]
-        p_kicker.text = f"SITE {idx + 1:02d} / {total_sites:02d}"
-        p_kicker.font.name = "Arial"
-        p_kicker.font.size = Pt(9.5)
-        p_kicker.font.bold = True
-        p_kicker.font.color.rgb = theme.accent_color
-        p_kicker.space_after = Pt(2)
+        _add_para(
+            tf_spec,
+            f"SITE {idx + 1:02d} / {total_sites:02d}",
+            font_size_pt=9.5,
+            bold=True,
+            color_rgb=theme.accent_color,
+            space_after_pt=2,
+        )
 
         # 2. Site Code
         site_code = site.get("inventory_code") or site.get("id") or f"SITE-{idx + 1}"
-        p_code = tf_spec.add_paragraph()
-        p_code.text = str(site_code)
-        p_code.font.name = "Arial"
-        p_code.font.size = Pt(20)
-        p_code.font.bold = True
-        p_code.font.color.rgb = theme.text_primary
-        p_code.space_after = Pt(2)
+        _add_para(
+            tf_spec,
+            str(site_code),
+            font_size_pt=20,
+            bold=True,
+            color_rgb=theme.text_primary,
+            space_after_pt=2,
+        )
 
         # 3. Location & Area
         loc_str = site.get("location") or site.get("area") or "Location Unavailable"
-        p_loc = tf_spec.add_paragraph()
-        p_loc.text = str(loc_str)
-        p_loc.font.name = "Arial"
-        p_loc.font.size = Pt(12)
-        p_loc.font.bold = True
-        p_loc.font.color.rgb = theme.text_primary
+        _add_para(
+            tf_spec,
+            str(loc_str),
+            font_size_pt=12,
+            bold=True,
+            color_rgb=theme.text_primary,
+        )
 
         city_area_parts = [site.get("area"), site.get("city")]
         city_area_str = ", ".join([str(p) for p in city_area_parts if p])
-        p_area = tf_spec.add_paragraph()
-        p_area.text = city_area_str or "—"
-        p_area.font.name = "Arial"
-        p_area.font.size = Pt(10)
-        p_area.font.color.rgb = theme.text_muted
-        p_area.space_after = Pt(8)
+        _add_para(
+            tf_spec,
+            city_area_str or "—",
+            font_size_pt=10,
+            bold=False,
+            color_rgb=theme.text_muted,
+            space_after_pt=8,
+        )
 
         # 4. Specifications
-        p_spec_head = tf_spec.add_paragraph()
-        p_spec_head.text = "SPECIFICATIONS"
-        p_spec_head.font.name = "Arial"
-        p_spec_head.font.size = Pt(9)
-        p_spec_head.font.bold = True
-        p_spec_head.font.color.rgb = theme.accent_color
-        p_spec_head.space_after = Pt(2)
+        _add_para(
+            tf_spec,
+            "SPECIFICATIONS",
+            font_size_pt=9,
+            bold=True,
+            color_rgb=theme.accent_color,
+            space_after_pt=2,
+        )
 
         media_type = site.get("media_type") or "—"
         sub_type = site.get("sub_type") or "—"
         type_str = f"• Type: {media_type} ({sub_type})" if sub_type != "—" else f"• Type: {media_type}"
-        p_type = tf_spec.add_paragraph()
-        p_type.text = type_str
-        p_type.font.name = "Arial"
-        p_type.font.size = Pt(9.5)
-        p_type.font.color.rgb = theme.text_primary
+        _add_para(
+            tf_spec,
+            type_str,
+            font_size_pt=9.5,
+            bold=False,
+            color_rgb=theme.text_primary,
+        )
 
         w_ft = site.get("width")
         h_ft = site.get("height")
@@ -486,85 +558,98 @@ class DeckBuilderService:
         dim_str = f"• Size: {w_ft or '—'} × {h_ft or '—'} ft"
         if sqft:
             dim_str += f" ({sqft:g} sq ft)" if isinstance(sqft, float) else f" ({sqft} sq ft)"
-        p_dim = tf_spec.add_paragraph()
-        p_dim.text = dim_str
-        p_dim.font.name = "Arial"
-        p_dim.font.size = Pt(9.5)
-        p_dim.font.color.rgb = theme.text_primary
+        _add_para(
+            tf_spec,
+            dim_str,
+            font_size_pt=9.5,
+            bold=False,
+            color_rgb=theme.text_primary,
+        )
 
         facing = site.get("facing") or "—"
         orientation = site.get("orientation") or "—"
-        p_facing = tf_spec.add_paragraph()
-        p_facing.text = f"• Facing: {facing} | {orientation}"
-        p_facing.font.name = "Arial"
-        p_facing.font.size = Pt(9.5)
-        p_facing.font.color.rgb = theme.text_primary
-        p_facing.space_after = Pt(8)
+        _add_para(
+            tf_spec,
+            f"• Facing: {facing} | {orientation}",
+            font_size_pt=9.5,
+            bold=False,
+            color_rgb=theme.text_primary,
+            space_after_pt=8,
+        )
 
         # 5. Audience Metrics (if enabled)
         if include_audience_metrics and site.get("admavin"):
             adm = site["admavin"]
-            p_aud_head = tf_spec.add_paragraph()
-            p_aud_head.text = "AUDIENCE METRICS (ADMAVIN)"
-            p_aud_head.font.name = "Arial"
-            p_aud_head.font.size = Pt(9)
-            p_aud_head.font.bold = True
-            p_aud_head.font.color.rgb = theme.accent_color
-            p_aud_head.space_after = Pt(2)
+            _add_para(
+                tf_spec,
+                "AUDIENCE METRICS (ADMAVIN)",
+                font_size_pt=9,
+                bold=True,
+                color_rgb=theme.accent_color,
+                space_after_pt=2,
+            )
 
             reach = adm.get("reach")
             ots = adm.get("ots")
             lts = adm.get("lts_score") or adm.get("lts_rating")
 
-            p_reach = tf_spec.add_paragraph()
-            p_reach.text = f"• Monthly Reach: {format_number(reach)}"
-            p_reach.font.name = "Arial"
-            p_reach.font.size = Pt(9.5)
-            p_reach.font.color.rgb = theme.text_primary
-
-            p_ots = tf_spec.add_paragraph()
-            p_ots.text = f"• OTS Impressions: {format_number(ots)}"
-            p_ots.font.name = "Arial"
-            p_ots.font.size = Pt(9.5)
-            p_ots.font.color.rgb = theme.text_primary
+            _add_para(
+                tf_spec,
+                f"• Monthly Reach: {format_number(reach)}",
+                font_size_pt=9.5,
+                bold=False,
+                color_rgb=theme.text_primary,
+            )
+            _add_para(
+                tf_spec,
+                f"• OTS Impressions: {format_number(ots)}",
+                font_size_pt=9.5,
+                bold=False,
+                color_rgb=theme.text_primary,
+                space_after_pt=8 if lts is None else 0,
+            )
 
             if lts is not None:
-                p_lts = tf_spec.add_paragraph()
-                p_lts.text = f"• LTS Score: {lts}"
-                p_lts.font.name = "Arial"
-                p_lts.font.size = Pt(9.5)
-                p_lts.font.color.rgb = theme.text_primary
-
-            p_ots.space_after = Pt(8)
+                _add_para(
+                    tf_spec,
+                    f"• LTS Score: {lts}",
+                    font_size_pt=9.5,
+                    bold=False,
+                    color_rgb=theme.text_primary,
+                    space_after_pt=8,
+                )
 
         # 6. Commercials (if enabled)
         if include_commercials and site.get("total_cost") is not None:
-            p_comm_head = tf_spec.add_paragraph()
-            p_comm_head.text = "INVESTMENT"
-            p_comm_head.font.name = "Arial"
-            p_comm_head.font.size = Pt(9)
-            p_comm_head.font.bold = True
-            p_comm_head.font.color.rgb = theme.accent_color
-            p_comm_head.space_after = Pt(2)
-
-            p_cost = tf_spec.add_paragraph()
-            p_cost.text = f"₹{format_inr(site.get('total_cost'))} / mo"
-            p_cost.font.name = "Arial"
-            p_cost.font.size = Pt(14)
-            p_cost.font.bold = True
-            p_cost.font.color.rgb = theme.text_primary
+            _add_para(
+                tf_spec,
+                "INVESTMENT",
+                font_size_pt=9,
+                bold=True,
+                color_rgb=theme.accent_color,
+                space_after_pt=2,
+            )
+            _add_para(
+                tf_spec,
+                f"₹{format_inr(site.get('total_cost'))} / mo",
+                font_size_pt=14,
+                bold=True,
+                color_rgb=theme.text_primary,
+            )
 
         # Slide Numbering
         footer_tb = slide.shapes.add_textbox(
             Inches(card_x), Inches(6.95), Inches(card_w), Inches(0.35)
         )
         tf_footer = footer_tb.text_frame
-        p_foot = tf_footer.paragraphs[0]
-        p_foot.text = f"Slide {idx + 2:02d} / {total_slides:02d}"
-        p_foot.alignment = PP_ALIGN.RIGHT
-        p_foot.font.name = "Arial"
-        p_foot.font.size = Pt(9)
-        p_foot.font.color.rgb = theme.text_muted
+        _add_para(
+            tf_footer,
+            f"Slide {idx + 2:02d} / {total_slides:02d}",
+            font_size_pt=9,
+            bold=False,
+            color_rgb=theme.text_muted,
+            alignment=PP_ALIGN.RIGHT,
+        )
 
     def _add_closing_slide(
         self,
@@ -584,21 +669,23 @@ class DeckBuilderService:
         tf_h = heading_tb.text_frame
         tf_h.word_wrap = True
 
-        p_thanks = tf_h.paragraphs[0]
-        p_thanks.text = "Thank You"
-        p_thanks.alignment = PP_ALIGN.CENTER
-        p_thanks.font.name = "Arial"
-        p_thanks.font.size = Pt(38)
-        p_thanks.font.bold = True
-        p_thanks.font.color.rgb = theme.text_primary
-        p_thanks.space_after = Pt(6)
-
-        p_sub = tf_h.add_paragraph()
-        p_sub.text = "Campaign Proposal & OOH Media Inventory Summary"
-        p_sub.alignment = PP_ALIGN.CENTER
-        p_sub.font.name = "Arial"
-        p_sub.font.size = Pt(15)
-        p_sub.font.color.rgb = theme.text_muted
+        _add_para(
+            tf_h,
+            "Thank You",
+            font_size_pt=38,
+            bold=True,
+            color_rgb=theme.text_primary,
+            space_after_pt=6,
+            alignment=PP_ALIGN.CENTER,
+        )
+        _add_para(
+            tf_h,
+            "Campaign Proposal & OOH Media Inventory Summary",
+            font_size_pt=15,
+            bold=False,
+            color_rgb=theme.text_muted,
+            alignment=PP_ALIGN.CENTER,
+        )
 
         # Summary Card
         card_w, card_h = 8.0, 3.2
@@ -626,56 +713,70 @@ class DeckBuilderService:
         tf_card = card_tb.text_frame
         tf_card.word_wrap = True
 
-        p_chead = tf_card.paragraphs[0]
-        p_chead.text = "CAMPAIGN SUMMARY"
-        p_chead.font.name = "Arial"
-        p_chead.font.size = Pt(11)
-        p_chead.font.bold = True
-        p_chead.font.color.rgb = theme.accent_color
-        p_chead.space_after = Pt(10)
-
-        p_sites = tf_card.add_paragraph()
-        p_sites.text = f"• Total Media Sites: {summary['site_count']}"
-        p_sites.font.name = "Arial"
-        p_sites.font.size = Pt(12)
-        p_sites.font.color.rgb = theme.text_primary
-        p_sites.space_after = Pt(6)
+        _add_para(
+            tf_card,
+            "CAMPAIGN SUMMARY",
+            font_size_pt=11,
+            bold=True,
+            color_rgb=theme.accent_color,
+            space_after_pt=10,
+        )
+        _add_para(
+            tf_card,
+            f"• Total Media Sites: {summary['site_count']}",
+            font_size_pt=12,
+            bold=False,
+            color_rgb=theme.text_primary,
+            space_after_pt=6,
+        )
 
         cities_str = ", ".join(summary["cities"]) if summary["cities"] else "—"
-        p_cities = tf_card.add_paragraph()
-        p_cities.text = f"• Target Cities: {cities_str}"
-        p_cities.font.name = "Arial"
-        p_cities.font.size = Pt(12)
-        p_cities.font.color.rgb = theme.text_primary
-        p_cities.space_after = Pt(6)
+        _add_para(
+            tf_card,
+            f"• Target Cities: {cities_str}",
+            font_size_pt=12,
+            bold=False,
+            color_rgb=theme.text_primary,
+            space_after_pt=6,
+        )
 
         if include_audience_metrics:
-            p_reach = tf_card.add_paragraph()
-            p_reach.text = f"• Combined Reach: {format_number(summary['total_reach'])} audience impressions"
-            p_reach.font.name = "Arial"
-            p_reach.font.size = Pt(12)
-            p_reach.font.color.rgb = theme.text_primary
-            p_reach.space_after = Pt(6)
+            _add_para(
+                tf_card,
+                f"• Combined Reach: {format_number(summary['total_reach'])} audience impressions",
+                font_size_pt=12,
+                bold=False,
+                color_rgb=theme.text_primary,
+                space_after_pt=6,
+            )
 
         if include_commercials:
-            p_cost = tf_card.add_paragraph()
-            p_cost.text = f"• Total Monthly Investment: ₹{format_inr(summary['total_monthly_cost'])} / month"
-            p_cost.font.name = "Arial"
-            p_cost.font.size = Pt(13)
-            p_cost.font.bold = True
-            p_cost.font.color.rgb = theme.text_primary
+            _add_para(
+                tf_card,
+                f"• Total Monthly Investment: ₹{format_inr(summary['total_monthly_cost'])} / month",
+                font_size_pt=13,
+                bold=True,
+                color_rgb=theme.text_primary,
+            )
 
         # Bottom Disclaimer
         disc_tb = slide.shapes.add_textbox(
             Inches(1.5), Inches(6.3), Inches(10.333), Inches(0.5)
         )
         tf_disc = disc_tb.text_frame
-        p_disc = tf_disc.paragraphs[0]
-        p_disc.text = "BuzzOmni Media Network  •  Commercial rates valid for 15 days  •  Confidential"
-        p_disc.alignment = PP_ALIGN.CENTER
-        p_disc.font.name = "Arial"
-        p_disc.font.size = Pt(10)
-        p_disc.font.color.rgb = theme.text_muted
+        if include_commercials:
+            disc_text = "BuzzOmni Media Network  •  Commercial rates valid for 15 days  •  Confidential"
+        else:
+            disc_text = "BuzzOmni Media Network  •  Confidential"
+
+        _add_para(
+            tf_disc,
+            disc_text,
+            font_size_pt=10,
+            bold=False,
+            color_rgb=theme.text_muted,
+            alignment=PP_ALIGN.CENTER,
+        )
 
     def save_and_upload(
         self,
@@ -686,7 +787,8 @@ class DeckBuilderService:
         """Save presentation file to disk and upload to S3 private storage."""
         slug_clean = re.sub(r"[^a-zA-Z0-9_-]", "_", (file_slug or "proposal").strip().lower()).strip("_") or "proposal"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_name = f"campaign_deck_{slug_clean}_{timestamp}.pptx"
+        token = uuid.uuid4().hex[:6]
+        file_name = f"campaign_deck_{slug_clean}_{timestamp}_{token}.pptx"
 
         local_file_path = self.exports_dir / file_name
         local_file_path.write_bytes(deck_bytes)
@@ -694,6 +796,7 @@ class DeckBuilderService:
         safe_expiry = min(max(expires_in, 60), 3600)
         s3_key = f"campaign-decks/{file_name}"
         s3_url: str | None = None
+        warnings: list[str] = []
 
         try:
             self._s3_client.put_object(
@@ -713,10 +816,12 @@ class DeckBuilderService:
                 extra={"error": str(exc), "bucket": self.bucket, "key": s3_key},
             )
             s3_url = None
+            warnings.append("S3 upload failed; presentation is saved locally only.")
 
         return {
             "file_name": file_name,
             "local_file_path": str(local_file_path.resolve()),
             "s3_download_url": s3_url,
             "expires_in_seconds": safe_expiry if s3_url else None,
+            "warnings": warnings,
         }

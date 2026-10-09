@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -32,10 +33,19 @@ async def generate_campaign_deck_handler(
         if str(ident).strip()
     ]
 
-    if not cleaned_identifiers:
+    seen = set()
+    deduped = [x for x in cleaned_identifiers if not (x in seen or seen.add(x))]
+
+    if not deduped:
         return StandardResponse.error_response(
             code="NO_VALID_SITES",
             message="No valid site identifiers provided to generate campaign deck.",
+        ).model_dump_json()
+
+    if len(deduped) > 50:
+        return StandardResponse.error_response(
+            code="TOO_MANY_SITES",
+            message=f"A maximum of 50 sites can be included in a campaign deck (received {len(deduped)}).",
         ).model_dump_json()
 
     valid_sites: list[dict[str, Any]] = []
@@ -44,7 +54,7 @@ async def generate_campaign_deck_handler(
     try:
         async with get_session() as session:
             service = MediaInventoryService(session)
-            for ident in cleaned_identifiers:
+            for ident in deduped:
                 site = await service.get_media_by_identifier(
                     identifier=ident,
                     include_price_history=False,
@@ -67,7 +77,8 @@ async def generate_campaign_deck_handler(
             norm_theme = "editorial"
 
         deck_service = DeckBuilderService()
-        deck_bytes, summary = deck_service.build_deck(
+        deck_bytes, summary = await asyncio.to_thread(
+            deck_service.build_deck,
             sites=valid_sites,
             campaign_title=campaign_title or "Campaign Proposal",
             client_name=client_name or "",
@@ -76,11 +87,15 @@ async def generate_campaign_deck_handler(
             include_audience_metrics=include_audience_metrics,
         )
 
-        upload_result = deck_service.save_and_upload(
+        upload_result = await asyncio.to_thread(
+            deck_service.save_and_upload,
             deck_bytes=deck_bytes,
             file_slug=campaign_title or "proposal",
             expires_in=expires_in,
         )
+
+        if upload_result.get("warnings"):
+            warnings.extend(upload_result["warnings"])
 
         data = {
             "file_name": upload_result["file_name"],

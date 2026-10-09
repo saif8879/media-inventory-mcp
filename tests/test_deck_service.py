@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from botocore.exceptions import ClientError
@@ -8,10 +9,14 @@ from httpx import ASGITransport, AsyncClient
 from PIL import Image
 import pptx
 from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches, Pt
 import pytest
 
 from mcp_server.server import create_app, create_mcp_server
-from mcp_server.services.deck_service import DeckBuilderService, format_inr
+from mcp_server.services.deck_service import DeckBuilderService, _add_para, format_inr
+from mcp_server.tools.generate_campaign_deck import generate_campaign_deck_handler
 
 
 def test_deck_dependencies_and_exports_dir():
@@ -217,6 +222,10 @@ def test_save_and_upload_s3_error_handled(tmp_path):
 
     assert Path(result["local_file_path"]).exists()
     assert result["s3_download_url"] is None
+    assert "warnings" in result
+    assert len(result["warnings"]) == 1
+    assert "S3 upload failed; presentation is saved locally only." in result["warnings"][0]
+    assert re.search(r"_[a-f0-9]{6}\.pptx$", result["file_name"]) is not None
 
 
 def test_format_inr_numbers():
@@ -409,5 +418,356 @@ async def test_health_endpoint_lists_generate_campaign_deck():
         assert res.status_code == 200
         health_data = res.json()
         assert "generate_campaign_deck" in health_data["tools"]
+
+
+def test_add_para_sets_run_level_font_formatting_and_xml():
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.50)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(4))
+    tf = tb.text_frame
+
+    # 1. First paragraph populates existing empty paragraph
+    p1 = _add_para(
+        tf,
+        "Primary Headline",
+        font_size_pt=24,
+        bold=True,
+        color_rgb=RGBColor(75, 142, 255),
+        space_after_pt=12,
+        alignment=PP_ALIGN.CENTER,
+    )
+    assert len(tf.paragraphs) == 1
+    assert len(p1.runs) == 1
+    run1 = p1.runs[0]
+    assert run1.text == "Primary Headline"
+    assert run1.font.name == "Arial"
+    assert run1.font.size == Pt(24)
+    assert run1.font.bold is True
+    assert run1.font.color.rgb == RGBColor(75, 142, 255)
+    assert p1.space_after == Pt(12)
+    assert p1.alignment == PP_ALIGN.CENTER
+
+    # Check XML serialization for run-level font formatting
+    xml1 = run1._r.xml
+    assert 'sz="2400"' in xml1
+    assert 'b="1"' in xml1
+    assert '4B8EFF' in xml1
+
+    # 2. Second paragraph appends a new paragraph to tf
+    p2 = _add_para(
+        tf,
+        "Secondary Subtitle",
+        font_size_pt=14,
+        bold=False,
+        color_rgb=RGBColor(148, 163, 184),
+        space_after_pt=6,
+    )
+    assert len(tf.paragraphs) == 2
+    assert len(p2.runs) == 1
+    run2 = p2.runs[0]
+    assert run2.text == "Secondary Subtitle"
+    assert run2.font.name == "Arial"
+    assert run2.font.size == Pt(14)
+    assert run2.font.bold is False
+    assert run2.font.color.rgb == RGBColor(148, 163, 184)
+    xml2 = run2._r.xml
+    assert 'sz="1400"' in xml2
+    assert '94A3B8' in xml2
+
+
+def test_build_deck_applies_run_level_styling_across_all_slides():
+    service = DeckBuilderService()
+    site = {
+        "id": "site-test",
+        "inventory_code": "TEST-01",
+        "city": "Mumbai",
+        "area": "Worli",
+        "location": "Sea Face",
+        "media_type": "Billboard",
+        "sub_type": "Frontlit",
+        "facing": "North",
+        "width": 40.0,
+        "height": 20.0,
+        "area_sq_ft": 800.0,
+        "total_cost": 300000.0,
+        "image_url": None,
+        "admavin": {
+            "reach": 500000,
+            "ots": 1200000,
+            "lts_score": 0.85,
+        },
+    }
+    deck_bytes, _ = service.build_deck(
+        sites=[site],
+        campaign_title="Run Styling Verification",
+        client_name="Test Brand",
+        theme="editorial",
+        include_commercials=True,
+        include_audience_metrics=True,
+    )
+
+    prs = Presentation(io.BytesIO(deck_bytes))
+    assert len(prs.slides) == 3
+
+    # Inspect all text shapes on all slides to confirm run-level formatting exists
+    for slide_idx, slide in enumerate(prs.slides):
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            tf = shape.text_frame
+            for p in tf.paragraphs:
+                for run in p.runs:
+                    assert run.font.name == "Arial"
+                    assert run.font.size is not None
+                    assert run.font.size.pt > 0
+                    assert run.font.color is not None
+                    assert run.font.color.rgb is not None
+
+
+def test_webp_image_conversion_downscale_and_embedding(tmp_path):
+    service = DeckBuilderService()
+
+    # 1. Create a WebP image in memory
+    webp_img = Image.new("RGBA", (300, 200), color=(80, 120, 200, 255))
+    webp_path = tmp_path / "test_image.webp"
+    webp_img.save(webp_path, format="WEBP")
+
+    # Fetch and normalize the WebP image
+    stream, dims = service.fetch_image(str(webp_path))
+    assert stream is not None
+    assert dims == (300, 200)
+
+    # Verify stream can be decoded by PIL and is converted to RGB JPEG
+    with Image.open(stream) as converted:
+        assert converted.format == "JPEG"
+        assert converted.mode == "RGB"
+        assert converted.size == (300, 200)
+
+    # 2. Test downscaling when max edge > 2000px
+    large_img = Image.new("RGB", (3000, 1500), color=(10, 20, 30))
+    large_path = tmp_path / "large_image.webp"
+    large_img.save(large_path, format="WEBP")
+
+    stream_large, dims_large = service.fetch_image(str(large_path))
+    assert stream_large is not None
+    assert dims_large == (2000, 1000)
+    with Image.open(stream_large) as converted_large:
+        assert converted_large.size == (2000, 1000)
+
+    # 3. Test embedding WebP image in build_deck
+    site = {
+        "id": "site-webp",
+        "inventory_code": "WEBP-01",
+        "city": "Bengaluru",
+        "area": "Koramangala",
+        "location": "80ft Road",
+        "media_type": "Digital Screen",
+        "image_url": str(webp_path),
+    }
+    deck_bytes, _ = service.build_deck(
+        sites=[site],
+        campaign_title="WebP Deck Test",
+    )
+    prs = Presentation(io.BytesIO(deck_bytes))
+    site_slide = prs.slides[1]
+    picture_shapes = [s for s in site_slide.shapes if s.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE]
+    assert len(picture_shapes) == 1
+
+
+def test_corrupt_image_falls_back_to_placeholder_without_error():
+    service = DeckBuilderService()
+    site = {
+        "id": "site-corrupt",
+        "inventory_code": "CORRUPT-01",
+        "city": "Delhi",
+        "image_url": "https://example.com/corrupt.jpg",
+    }
+
+    # Return corrupt bytes buffer that will fail inside add_picture
+    corrupt_stream = io.BytesIO(b"not-an-image-at-all")
+    with patch.object(service, "fetch_image", return_value=(corrupt_stream, (800, 600))):
+        deck_bytes, _ = service.build_deck(sites=[site])
+        prs = Presentation(io.BytesIO(deck_bytes))
+        site_slide = prs.slides[1]
+        # Should NOT contain a picture shape, but fallback placeholder text
+        picture_shapes = [s for s in site_slide.shapes if s.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.PICTURE]
+        assert len(picture_shapes) == 0
+
+        # Check placeholder text exists in shapes
+        all_text = " ".join(
+            s.text_frame.text for s in site_slide.shapes if s.has_text_frame
+        )
+        assert "Site Photo Pending / Unavailable" in all_text
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_deduplication_and_order():
+    server = create_mcp_server()
+    site_mi1 = {"id": "1", "inventory_code": "MI1", "city": "Mumbai", "image_url": None}
+    site_mi2 = {"id": "2", "inventory_code": "MI2", "city": "Delhi", "image_url": None}
+
+    lookup_order: list[str] = []
+
+    async def mock_get_by_id(identifier, **kwargs):
+        lookup_order.append(identifier)
+        if identifier == "MI1":
+            return site_mi1
+        if identifier == "MI2":
+            return site_mi2
+        return None
+
+    with patch("mcp_server.tools.generate_campaign_deck.MediaInventoryService") as mock_srv_cls, \
+         patch("mcp_server.tools.generate_campaign_deck.DeckBuilderService") as mock_deck_cls:
+        mock_srv = mock_srv_cls.return_value
+        mock_srv.get_media_by_identifier = AsyncMock(side_effect=mock_get_by_id)
+
+        mock_deck_instance = MagicMock()
+        mock_deck_cls.return_value = mock_deck_instance
+        mock_deck_instance.build_deck.return_value = (b"fake-pptx", {
+            "site_count": 2,
+            "total_monthly_cost": 0,
+            "total_reach": 0,
+            "cities": ["Delhi", "Mumbai"],
+        })
+        mock_deck_instance.save_and_upload.return_value = {
+            "file_name": "campaign_deck_test.pptx",
+            "local_file_path": "/tmp/deck.pptx",
+            "s3_download_url": None,
+            "expires_in_seconds": None,
+            "warnings": [],
+        }
+
+        # Send duplicates in specific order: MI1, MI2, MI1, MI2, MI1
+        res = await server.call_tool(
+            "generate_campaign_deck",
+            {"site_identifiers": ["MI1", "MI2", "MI1", "MI2", "MI1"]}
+        )
+        assert not res.is_error
+        data = json.loads(res.content[0].text)
+        assert data["success"] is True
+        # Verify get_media_by_identifier was called exactly twice and in order
+        assert lookup_order == ["MI1", "MI2"]
+        # Verify build_deck received the two deduped sites
+        call_sites = mock_deck_instance.build_deck.call_args[1]["sites"]
+        assert len(call_sites) == 2
+        assert [s["inventory_code"] for s in call_sites] == ["MI1", "MI2"]
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_50_site_cap():
+    server = create_mcp_server()
+
+    # Case 1: 51 unique sites should be rejected
+    fifty_one_sites = [f"MI{i}" for i in range(1, 52)]
+    res = await server.call_tool(
+        "generate_campaign_deck",
+        {"site_identifiers": fifty_one_sites}
+    )
+    assert not res.is_error
+    data = json.loads(res.content[0].text)
+    assert data["success"] is False
+    assert data["error"]["code"] == "TOO_MANY_SITES"
+    assert "50 sites" in data["error"]["message"]
+
+    # Case 2: 60 sites with duplicates reducing to <= 50 should be accepted
+    repeated_sites = [f"MI{i % 40}" for i in range(60)]
+    site_obj = {"id": "1", "inventory_code": "MI0", "city": "Mumbai", "image_url": None}
+
+    with patch("mcp_server.tools.generate_campaign_deck.MediaInventoryService") as mock_srv_cls, \
+         patch("mcp_server.tools.generate_campaign_deck.DeckBuilderService") as mock_deck_cls:
+        mock_srv = mock_srv_cls.return_value
+        mock_srv.get_media_by_identifier = AsyncMock(return_value=site_obj)
+
+        mock_deck_instance = MagicMock()
+        mock_deck_cls.return_value = mock_deck_instance
+        mock_deck_instance.build_deck.return_value = (b"fake-pptx", {
+            "site_count": 40,
+            "total_monthly_cost": 0,
+            "total_reach": 0,
+            "cities": ["Mumbai"],
+        })
+        mock_deck_instance.save_and_upload.return_value = {
+            "file_name": "campaign_deck_test.pptx",
+            "local_file_path": "/tmp/deck.pptx",
+            "s3_download_url": None,
+            "expires_in_seconds": None,
+            "warnings": [],
+        }
+
+        res2 = await server.call_tool(
+            "generate_campaign_deck",
+            {"site_identifiers": repeated_sites}
+        )
+        data2 = json.loads(res2.content[0].text)
+        assert data2["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_s3_warning_propagated_to_response():
+    site_obj = {"id": "1", "inventory_code": "MI1", "city": "Mumbai", "image_url": None}
+    with patch("mcp_server.tools.generate_campaign_deck.MediaInventoryService") as mock_srv_cls, \
+         patch("mcp_server.tools.generate_campaign_deck.DeckBuilderService") as mock_deck_cls:
+        mock_srv = mock_srv_cls.return_value
+        mock_srv.get_media_by_identifier = AsyncMock(return_value=site_obj)
+
+        mock_deck_instance = MagicMock()
+        mock_deck_cls.return_value = mock_deck_instance
+        mock_deck_instance.build_deck.return_value = (b"fake-pptx", {
+            "site_count": 1,
+            "total_monthly_cost": 0,
+            "total_reach": 0,
+            "cities": ["Mumbai"],
+        })
+        mock_deck_instance.save_and_upload.return_value = {
+            "file_name": "campaign_deck_test.pptx",
+            "local_file_path": "/tmp/deck.pptx",
+            "s3_download_url": None,
+            "expires_in_seconds": None,
+            "warnings": ["S3 upload failed; presentation is saved locally only."],
+        }
+
+        result_json = await generate_campaign_deck_handler(site_identifiers=["MI1"])
+        data = json.loads(result_json)
+        assert data["success"] is True
+        assert any("S3 upload failed" in w for w in data["data"]["warnings"])
+
+
+def test_closing_slide_commercials_conditionality():
+    service = DeckBuilderService()
+    site = {
+        "id": "site-comm",
+        "inventory_code": "COMM-01",
+        "city": "Mumbai",
+        "total_cost": 100000.0,
+        "image_url": None,
+    }
+
+    # 1. include_commercials=True: should contain "Commercial rates valid for 15 days"
+    deck_with_comm, _ = service.build_deck(
+        sites=[site],
+        include_commercials=True,
+    )
+    prs_comm = Presentation(io.BytesIO(deck_with_comm))
+    closing_slide_comm = prs_comm.slides[-1]
+    closing_text_comm = " ".join(
+        shape.text_frame.text for shape in closing_slide_comm.shapes if shape.has_text_frame
+    )
+    assert "Commercial rates valid for 15 days" in closing_text_comm
+
+    # 2. include_commercials=False: should NOT contain "Commercial rates valid for 15 days"
+    deck_no_comm, _ = service.build_deck(
+        sites=[site],
+        include_commercials=False,
+    )
+    prs_no_comm = Presentation(io.BytesIO(deck_no_comm))
+    closing_slide_no_comm = prs_no_comm.slides[-1]
+    closing_text_no_comm = " ".join(
+        shape.text_frame.text for shape in closing_slide_no_comm.shapes if shape.has_text_frame
+    )
+    assert "Commercial rates valid for 15 days" not in closing_text_no_comm
+    assert "BuzzOmni Media Network  •  Confidential" in closing_text_no_comm
+
 
 

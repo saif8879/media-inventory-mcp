@@ -123,7 +123,7 @@ All tools return a standardized response format:
 * **Layout & Structure**:
   * **16:9 Widescreen Layout**: Engineered for modern enterprise displays (`13.333"` x `7.50"`).
   * **Color Themes**:
-    * `"editorial"` (Default): Sophisticated dark palette (deep navy `#0B132B`, dark slate `#1C2541`, rich card backgrounds, vibrant accent `#48E5C2`).
+    * `"editorial"` (Default): Sophisticated dark palette (deep navy `#0B1F3A`, panel `#112A4D`, electric blue accent `#4B8EFF`).
     * `"classic"`: Minimalist executive light palette (clean white `#FFFFFF`, cool slate `#F4F6F9`, dark navy text `#0F172A`, vibrant blue accent `#2563EB`).
   * **Cover Slide**: Campaign kicker, title, client subtitle, date badge, and campaign summary metrics.
   * **Site Detail Slides**: One slide per inventory site featuring an aspect-ratio-preserving photo container (contain-fit with letterboxing prevention), site identifier badge, technical dimensions, illumination status, location highlights, AdMavin audience metrics grid, and commercial pricing card.
