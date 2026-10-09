@@ -7,7 +7,7 @@ from PIL import Image
 import pptx
 from pptx import Presentation
 
-from mcp_server.services.deck_service import DeckBuilderService
+from mcp_server.services.deck_service import DeckBuilderService, format_inr
 
 
 def test_deck_dependencies_and_exports_dir():
@@ -213,3 +213,60 @@ def test_save_and_upload_s3_error_handled(tmp_path):
 
     assert Path(result["local_file_path"]).exists()
     assert result["s3_download_url"] is None
+
+
+def test_format_inr_numbers():
+    assert format_inr(None) == "—"
+    assert format_inr(0) == "0"
+    assert format_inr(500) == "500"
+    assert format_inr(450000) == "4,50,000"
+    assert format_inr(10000000) == "1,00,00,000"
+    assert format_inr(-500) == "-500"
+    assert format_inr(-450000) == "-4,50,000"
+
+
+def test_fetch_image_bucket_none():
+    service = DeckBuilderService()
+    service.bucket = None
+
+    # 1. With HTTP URL that fails to download or returns 404 (mock httpx)
+    with patch("httpx.Client") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_client.get.return_value = mock_resp
+        mock_client_cls.return_value = mock_client
+
+        img_stream, dims = service.fetch_image("https://example.com/test.jpg")
+        assert img_stream is None
+        assert dims is None
+
+    # 2. With S3 key string when bucket is None
+    img_stream_key, dims_key = service.fetch_image("inventory/site1.jpg")
+    assert img_stream_key is None
+    assert dims_key is None
+
+
+def test_fetch_image_s3_url_unquotes_key():
+    mock_s3 = MagicMock()
+    img = Image.new("RGB", (100, 100), color=(10, 20, 30))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
+
+    mock_body = MagicMock()
+    mock_body.read.return_value = img_bytes
+    mock_s3.get_object.return_value = {"Body": mock_body}
+
+    service = DeckBuilderService(s3_client=mock_s3, bucket="my-bucket")
+    url = "https://my-bucket.s3.ap-south-1.amazonaws.com/my-bucket/site%20photos/photo%201.jpg"
+    stream, dims = service.fetch_image(url)
+
+    assert stream is not None
+    assert dims == (100, 100)
+    mock_s3.get_object.assert_called_once_with(
+        Bucket="my-bucket",
+        Key="site photos/photo 1.jpg",
+    )
+

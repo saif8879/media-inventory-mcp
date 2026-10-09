@@ -64,8 +64,10 @@ def format_inr(amount: float | int | None) -> str:
     if amount is None:
         return "—"
     try:
-        val = int(round(float(amount)))
-        s = str(val)
+        value = int(round(float(amount)))
+        if value < 0:
+            return "-" + format_inr(abs(value))
+        s = str(value)
         if len(s) <= 3:
             return s
         last_three = s[-3:]
@@ -148,10 +150,10 @@ class DeckBuilderService:
         try:
             if cleaned.startswith(("http://", "https://")):
                 # Check if it points to our configured S3 bucket
-                if self.bucket in cleaned:
+                if self.bucket and self.bucket in cleaned:
                     try:
                         parsed = urllib.parse.urlparse(cleaned)
-                        key = parsed.path.lstrip("/")
+                        key = urllib.parse.unquote(parsed.path.lstrip("/"))
                         if key.startswith(f"{self.bucket}/"):
                             key = key[len(self.bucket) + 1 :]
                         resp = self._s3_client.get_object(Bucket=self.bucket, Key=key)
@@ -168,9 +170,9 @@ class DeckBuilderService:
 
             elif Path(cleaned).exists() and Path(cleaned).is_file():
                 raw_bytes = Path(cleaned).read_bytes()
-            else:
+            elif self.bucket:
                 # S3 key
-                normalized_key = cleaned.lstrip("/")
+                normalized_key = urllib.parse.unquote(cleaned.lstrip("/"))
                 resp = self._s3_client.get_object(Bucket=self.bucket, Key=normalized_key)
                 raw_bytes = resp["Body"].read()
 
