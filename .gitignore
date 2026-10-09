@@ -1,12 +1,19 @@
-.venv/
+# Ignore everything in repository by default
+/*
+
+# Whitelist essential root configuration
+!.gitignore
+!requirements.txt
+
+# Whitelist mcp_server source package
+!mcp_server/
+
+# Ignore Python bytecode and local artifacts everywhere
 __pycache__/
-*.pyc
-.pytest_cache/
-.env
-exports/*
-!exports/.gitkeep
-*.pptx
-deliverables/
-.superpowers/
+*.py[cod]
+*$py.class
+*.so
 .DS_Store
 *.DS_Store
+.env
+.env.*
