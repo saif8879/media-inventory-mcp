@@ -6,6 +6,11 @@
 !README.md
 !requirements.txt
 
+# Whitelist Docker build files
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
+
 # Whitelist mcp_server source package
 !mcp_server/
 
