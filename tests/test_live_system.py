@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pptx import Presentation
 
 from mcp_server.server import create_app, create_mcp_server
 
@@ -88,3 +90,33 @@ async def test_live_system_verification():
     assert "url" in asset
     assert asset["url"].startswith("http")
     assert asset["is_presigned"] is True
+
+    # Tool 7: generate_campaign_deck
+    res_deck = await server.call_tool(
+        "generate_campaign_deck",
+        {
+            "site_identifiers": [sample_code],
+            "campaign_title": "Live Verification Pitch",
+            "client_name": "Test Client",
+        },
+    )
+    assert not res_deck.is_error
+    data_deck_resp = json.loads(res_deck.content[0].text)
+    assert data_deck_resp["success"] is True
+    deck_data = data_deck_resp["data"]
+    assert deck_data["site_count"] == 1
+    assert os.path.exists(deck_data["local_file_path"])
+    assert deck_data["local_file_path"].endswith(".pptx")
+
+    # Verify PPTX file using python-pptx (slides count == 3: Cover, Site, Closing)
+    prs = Presentation(deck_data["local_file_path"])
+    assert len(prs.slides) == 3
+
+    # Verify S3 presigned download URL is returned and active
+    assert deck_data["s3_download_url"] is not None
+    assert deck_data["s3_download_url"].startswith("http")
+
+    async with AsyncClient() as http_client:
+        s3_res = await http_client.get(deck_data["s3_download_url"])
+        assert s3_res.status_code == 200
+        assert len(s3_res.content) > 0

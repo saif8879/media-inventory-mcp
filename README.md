@@ -32,6 +32,7 @@ The server connects AI models directly to the existing Media Inventory database 
      | - get_media_statistics       |                         +-------------------------------+
      | - get_media_asset             |
      | - find_related_media          |
+     | - generate_campaign_deck      |
      +---------------+---------------+
                      |
   +------------------+------------------+
@@ -116,6 +117,47 @@ All tools return a standardized response format:
   * `radius_km` *(float, default: 5.0, max: 50.0)*: Radius in kilometers.
   * `same_media_type` *(bool, default: false)*: Restrict results to the same media type.
   * `limit` *(int, default: 10, max: 50)*: Maximum results.
+
+### 7. `generate_campaign_deck`
+* **Description**: Generate an Out-of-Home (OOH) campaign pitch presentation deck in 16:9 widescreen PPTX format (`.pptx`, 13.333" x 7.50") for selected media inventory sites. Embeds high-resolution site photographs, technical specifications (dimensions, illumination), location attributes, AdMavin audience intelligence, and quotation costs. Delivers both local file path and a private S3 presigned download URL.
+* **Layout & Structure**:
+  * **16:9 Widescreen Layout**: Engineered for modern enterprise displays (`13.333"` x `7.50"`).
+  * **Color Themes**:
+    * `"editorial"` (Default): Sophisticated dark palette (deep navy `#0B132B`, dark slate `#1C2541`, rich card backgrounds, vibrant accent `#48E5C2`).
+    * `"classic"`: Minimalist executive light palette (clean white `#FFFFFF`, cool slate `#F4F6F9`, dark navy text `#0F172A`, vibrant blue accent `#2563EB`).
+  * **Cover Slide**: Campaign kicker, title, client subtitle, date badge, and campaign summary metrics.
+  * **Site Detail Slides**: One slide per inventory site featuring an aspect-ratio-preserving photo container (contain-fit with letterboxing prevention), site identifier badge, technical dimensions, illumination status, location highlights, AdMavin audience metrics grid, and commercial pricing card.
+  * **Closing Slide**: Executive campaign recap card aggregating total sites, target cities, combined audience reach, and total monthly investment with confidentiality notice.
+* **Parameters**:
+  * `site_identifiers` *(list of strings, required)*: List of site inventory codes (e.g. `["MI1", "MI7"]`) or UUIDs.
+  * `campaign_title` *(string, default: "Campaign Proposal")*: Title for the campaign deck.
+  * `client_name` *(string, optional, default: "")*: Name of the client or brand.
+  * `theme` *(string, default: "editorial")*: Color theme (`"editorial"` or `"classic"`).
+  * `include_commercials` *(bool, default: true)*: Include pricing cards, monthly rate, and quotation rates.
+  * `include_audience_metrics` *(bool, default: true)*: Include monthly reach, impressions, OTS, and AdMavin audience metrics.
+  * `expires_in` *(int, default: 900, min: 60, max: 3600)*: Expiry time in seconds for the S3 presigned download URL.
+* **Output Payload**:
+  ```json
+  {
+    "success": true,
+    "data": {
+      "file_name": "campaign_deck_proposal_20261009_120000.pptx",
+      "local_file_path": "/path/to/media-in-mcp/exports/campaign_deck_proposal_20261009_120000.pptx",
+      "s3_download_url": "https://buzzomni-media-inventory.s3.ap-south-1.amazonaws.com/campaign-decks/campaign_deck_...pptx?...",
+      "expires_in_seconds": 900,
+      "site_count": 2,
+      "theme": "editorial",
+      "summary": {
+        "site_count": 2,
+        "cities": ["Mumbai"],
+        "total_monthly_cost": 450000.0,
+        "total_reach": 850000
+      },
+      "warnings": []
+    },
+    "error": null
+  }
+  ```
 
 ---
 
@@ -274,6 +316,7 @@ Add to `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
 * *"Get the photo asset link for MI1."*
 * *"Find all media sites within 3 km of site MI12 and tell me their distance."*
 * *"Are there any digital LED screens in Bangalore with audience traffic ratings above 4.0?"*
+* *"Generate a 16:9 widescreen campaign presentation deck in editorial theme for sites MI1 and MI7 for client Nike."*
 
 ---
 
