@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mcp_server.tools.find_related_media import find_related_media_handler
+from mcp_server.tools.generate_campaign_deck import generate_campaign_deck_handler
 from mcp_server.tools.get_media_asset import get_media_asset_handler
 from mcp_server.tools.get_media_details import get_media_details_handler
 from mcp_server.tools.get_media_statistics import get_media_statistics_handler
@@ -159,4 +160,33 @@ def register_tools(server: MCPServer) -> None:
             radius_km=radius_km,
             same_media_type=same_media_type,
             limit=limit,
+        )
+
+    @server.tool(
+        name="generate_campaign_deck",
+        description=(
+            "Generate an Out-of-Home (OOH) presentation deck (.pptx format, 16:9 widescreen) "
+            "for selected media sites matching the agency pitch deck designs from media-inventory "
+            "(Editorial Navy or Classic White). Embeds site photographs, technical dimensions, "
+            "location details, audience metrics, and quotation costs. Delivers both local file path "
+            "and private S3 presigned download URL."
+        ),
+    )
+    async def generate_campaign_deck(
+        site_identifiers: list[str],
+        campaign_title: str = "Campaign Proposal",
+        client_name: str = "",
+        theme: str = "editorial",
+        include_commercials: bool = True,
+        include_audience_metrics: bool = True,
+        expires_in: int = 900,
+    ) -> str:
+        return await generate_campaign_deck_handler(
+            site_identifiers=site_identifiers,
+            campaign_title=campaign_title,
+            client_name=client_name,
+            theme=theme,
+            include_commercials=include_commercials,
+            include_audience_metrics=include_audience_metrics,
+            expires_in=expires_in,
         )

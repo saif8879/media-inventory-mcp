@@ -1,12 +1,16 @@
 import io
+import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from botocore.exceptions import ClientError
+from httpx import ASGITransport, AsyncClient
 from PIL import Image
 import pptx
 from pptx import Presentation
+import pytest
 
+from mcp_server.server import create_app, create_mcp_server
 from mcp_server.services.deck_service import DeckBuilderService, format_inr
 
 
@@ -269,4 +273,141 @@ def test_fetch_image_s3_url_unquotes_key():
         Bucket="my-bucket",
         Key="site photos/photo 1.jpg",
     )
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_lists_generate_campaign_deck():
+    server = create_mcp_server()
+    tools = await server.list_tools()
+    tool_names = {t.name for t in tools}
+    assert "generate_campaign_deck" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_handler_no_sites():
+    server = create_mcp_server()
+    res = await server.call_tool(
+        "generate_campaign_deck",
+        {"site_identifiers": []}
+    )
+    assert not res.is_error
+    data = json.loads(res.content[0].text)
+    assert data["success"] is False
+    assert data["error"]["code"] == "NO_VALID_SITES"
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_handler_all_invalid_sites():
+    server = create_mcp_server()
+    with patch("mcp_server.tools.generate_campaign_deck.MediaInventoryService") as mock_srv_cls:
+        mock_srv = mock_srv_cls.return_value
+        mock_srv.get_media_by_identifier = AsyncMock(return_value=None)
+        res = await server.call_tool(
+            "generate_campaign_deck",
+            {"site_identifiers": ["INVALID_CODE_1", "INVALID_CODE_2"]}
+        )
+        assert not res.is_error
+        data = json.loads(res.content[0].text)
+        assert data["success"] is False
+        assert data["error"]["code"] == "NO_VALID_SITES"
+        assert len(data["error"]["details"]["warnings"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_campaign_deck_handler_success_with_warnings(tmp_path):
+    server = create_mcp_server()
+    site_valid = {
+        "id": "site-1",
+        "inventory_code": "MI1",
+        "city": "Mumbai",
+        "area": "Bandra West",
+        "location": "Linking Road",
+        "media_type": "Billboard",
+        "sub_type": "Frontlit",
+        "facing": "North",
+        "width": 30.0,
+        "height": 15.0,
+        "area_sq_ft": 450.0,
+        "total_cost": 450000.0,
+        "image_url": None,
+        "admavin": {
+            "reach": 1250000,
+            "ots": 3400000,
+            "lts_score": 0.88,
+        },
+    }
+
+    async def mock_get_by_id(identifier, **kwargs):
+        if identifier == "MI1":
+            return site_valid
+        return None
+
+    with patch("mcp_server.tools.generate_campaign_deck.MediaInventoryService") as mock_srv_cls, \
+         patch("mcp_server.tools.generate_campaign_deck.DeckBuilderService") as mock_deck_cls:
+        mock_srv = mock_srv_cls.return_value
+        mock_srv.get_media_by_identifier = AsyncMock(side_effect=mock_get_by_id)
+
+        mock_deck_instance = MagicMock()
+        mock_deck_cls.return_value = mock_deck_instance
+        mock_deck_instance.build_deck.return_value = (b"fake-pptx", {
+            "site_count": 1,
+            "total_monthly_cost": 450000.0,
+            "total_reach": 1250000,
+            "cities": ["Mumbai"],
+        })
+        mock_deck_instance.save_and_upload.return_value = {
+            "file_name": "campaign_deck_proposal_test.pptx",
+            "local_file_path": str(tmp_path / "campaign_deck_proposal_test.pptx"),
+            "s3_download_url": "https://s3.example.com/test.pptx",
+            "expires_in_seconds": 900,
+        }
+
+        res = await server.call_tool(
+            "generate_campaign_deck",
+            {
+                "site_identifiers": ["MI1", "NON_EXISTENT"],
+                "campaign_title": "Summer Festival",
+                "client_name": "Pepsi",
+                "theme": "editorial",
+                "include_commercials": True,
+                "include_audience_metrics": True,
+                "expires_in": 900,
+            }
+        )
+        assert not res.is_error
+        data = json.loads(res.content[0].text)
+        assert data["success"] is True
+        deck_data = data["data"]
+        assert deck_data["site_count"] == 1
+        assert deck_data["theme"] == "editorial"
+        assert deck_data["file_name"] == "campaign_deck_proposal_test.pptx"
+        assert deck_data["s3_download_url"] == "https://s3.example.com/test.pptx"
+        assert len(deck_data["warnings"]) == 1
+        assert "NON_EXISTENT" in deck_data["warnings"][0]
+        mock_deck_instance.build_deck.assert_called_once_with(
+            sites=[site_valid],
+            campaign_title="Summer Festival",
+            client_name="Pepsi",
+            theme="editorial",
+            include_commercials=True,
+            include_audience_metrics=True,
+        )
+        mock_deck_instance.save_and_upload.assert_called_once_with(
+            deck_bytes=b"fake-pptx",
+            file_slug="Summer Festival",
+            expires_in=900,
+        )
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lists_generate_campaign_deck():
+    app = create_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        res = await client.get("/health")
+        assert res.status_code == 200
+        health_data = res.json()
+        assert "generate_campaign_deck" in health_data["tools"]
+
 

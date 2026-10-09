@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
                 "get_media_statistics",
                 "get_media_asset",
                 "find_related_media",
+                "generate_campaign_deck",
             ],
         }
 

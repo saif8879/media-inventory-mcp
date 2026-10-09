@@ -21,7 +21,8 @@ async def test_live_system_verification():
         health_data = health_res.json()
         assert health_data["status"] == "ok"
         assert health_data["service"] == "media-inventory-mcp"
-        assert len(health_data["tools"]) == 6
+        assert len(health_data["tools"]) == 7
+        assert "generate_campaign_deck" in health_data["tools"]
 
         # Unauthorized access protection
         unauth_res = await client.get("/sse")
