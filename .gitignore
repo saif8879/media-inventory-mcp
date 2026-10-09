@@ -3,6 +3,7 @@
 
 # Whitelist essential root configuration
 !.gitignore
+!README.md
 !requirements.txt
 
 # Whitelist mcp_server source package
