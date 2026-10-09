@@ -47,7 +47,7 @@ async def generate_campaign_deck_handler(
             for ident in cleaned_identifiers:
                 site = await service.get_media_by_identifier(
                     identifier=ident,
-                    include_price_history=True,
+                    include_price_history=False,
                     include_audience_metrics=include_audience_metrics,
                 )
                 if site is None:
@@ -62,12 +62,16 @@ async def generate_campaign_deck_handler(
                 details={"requested_sites": site_identifiers, "warnings": warnings},
             ).model_dump_json()
 
+        norm_theme = (theme or "editorial").strip().lower()
+        if norm_theme not in ("editorial", "classic"):
+            norm_theme = "editorial"
+
         deck_service = DeckBuilderService()
         deck_bytes, summary = deck_service.build_deck(
             sites=valid_sites,
             campaign_title=campaign_title or "Campaign Proposal",
             client_name=client_name or "",
-            theme=theme or "editorial",
+            theme=norm_theme,
             include_commercials=include_commercials,
             include_audience_metrics=include_audience_metrics,
         )
@@ -84,7 +88,7 @@ async def generate_campaign_deck_handler(
             "s3_download_url": upload_result["s3_download_url"],
             "expires_in_seconds": upload_result["expires_in_seconds"],
             "site_count": summary["site_count"],
-            "theme": theme,
+            "theme": norm_theme,
             "summary": summary,
             "warnings": warnings,
         }
