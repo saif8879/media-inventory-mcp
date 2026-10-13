@@ -13,8 +13,8 @@ The server connects AI models directly to the existing Media Inventory database 
                               | AI Client (Claude Desktop / Cursor)   |
                               +-------------------+-------------------+
                                                   |
-                                                  | HTTP GET /sse
-                                                  | Header: Authorization: Bearer <MCP_API_KEY>
+                                                  | HTTP POST /mcp
+                                                  | Header: Authorization: Bearer <access token>
                                                   v
                               +---------------------------------------+
                               | Media Inventory MCP Server            |
@@ -26,7 +26,7 @@ The server connects AI models directly to the existing Media Inventory database 
                      v                                                         v
      +-------------------------------+                         +-------------------------------+
      | MCP Tool Layer (Pydantic v2)  |                         |  Auth Middleware & Guardrails |
-     | - search_media                |                         |  - Bearer / X-MCP-Key token   |
+     | - search_media                |                         | - Google Workspace sign-in   |
      | - get_media_details           |                         |  - Rate bounds (limit <= 100) |
      | - list_media                  |                         |  - Traversal & error safety   |
      | - get_media_statistics       |                         +-------------------------------+
@@ -164,12 +164,13 @@ All tools return a standardized response format:
 ## 3. Security & Safety
 
 1. **Authentication**:
-   * All requests to the MCP endpoint (`/sse` and `/messages`) require authentication via:
-     * Header: `Authorization: Bearer <MCP_API_KEY>`
-     * Header: `X-MCP-Key: <MCP_API_KEY>`
-     * Query param: `?token=<MCP_API_KEY>` (supported for SSE browser clients)
-   * Unauthenticated or invalid requests receive `401 Unauthorized`.
-   * `/health` remains accessible for load balancer health probes.
+   * HTTP clients (`/mcp`, `/sse`, `/messages`) sign in with Google. Only a verified `@wrap2earn.com` Workspace account is accepted.
+   * The browser opens Google's own sign-in. This server then gives the MCP client a short-lived access token.
+   * A missing or expired token receives `401` and a `WWW-Authenticate` header so the client can start sign-in again.
+   * The old shared `MCP_API_KEY`, `X-MCP-Key`, and `?token=` values are not accepted.
+   * Local stdio (running this Python process on your own machine) stays open. There is no browser in that mode.
+   * `/health` stays open for load balancer probes.
+   * On startup the server creates `oauth_clients`, `oauth_auth_codes`, and `oauth_refresh_tokens` in the same Postgres database. The database user needs permission to create those tables.
 2. **Private S3 Assets**:
    * S3 bucket remains strictly private.
    * `boto3` generates time-bound Presigned URLs with standard expiration (default 15 minutes, maximum 1 hour).
@@ -194,7 +195,11 @@ cp .env.example .env
 | `DATABASE_URL` | PostgreSQL async connection string (`postgresql+asyncpg://...`) | *Required* |
 | `MCP_SERVER_HOST` | Host to bind the MCP server | `0.0.0.0` |
 | `MCP_SERVER_PORT` | Port for the MCP server | `8090` |
-| `MCP_API_KEY` | Secret token required by MCP clients to connect | *Required in Prod* |
+| `MCP_PUBLIC_URL` | Public HTTPS origin of this server, no trailing slash | *Required for HTTP* |
+| `GOOGLE_CLIENT_ID` | Google OAuth client id (Internal app) | *Required for HTTP* |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | *Required for HTTP* |
+| `GOOGLE_HOSTED_DOMAIN` | Workspace domain allowed to sign in | `wrap2earn.com` |
+| `OAUTH_JWT_SECRET` | Secret used to sign MCP access tokens (32+ bytes) | *Required for HTTP* |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | *Required for S3* |
 | `AWS_SECRET_ACCESS_KEY`| AWS secret key for S3 | *Required for S3* |
 | `AWS_BUCKET` | S3 bucket name | `buzzomni-media-inventory` |
@@ -244,7 +249,7 @@ curl http://localhost:8090/health
 1. **Configure Environment**:
    ```bash
    cp .env.example .env
-   # Ensure DATABASE_URL, MCP_API_KEY, and AWS credentials are set
+   # Ensure DATABASE_URL, Google OAuth settings, and AWS credentials are set
    ```
 
 2. **Build and Start with Docker Compose**:
@@ -325,32 +330,36 @@ bash deploy/deploy.sh
 }
 ```
 
-**Option B: Remote / Local SSE Transport**
+**Option B: Remote HTTP (Google sign-in)**
 ```json
 {
   "mcpServers": {
     "media-inventory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sse",
-        "http://localhost:8090/sse?token=your-secure-mcp-api-key-here"
-      ]
+      "url": "https://mcp.example.com/mcp"
     }
   }
 }
 ```
+The client opens Google sign-in the first time it connects. Use the server's public HTTPS URL. Do not put a token in the URL.
+
+### Google Cloud setup
+In the wrap2earn Google Cloud organization:
+
+1. Open **APIs & Services → OAuth consent screen** and set the user type to **Internal**.
+2. Create an OAuth client ID of type **Web application**.
+3. Add this authorized redirect URI: `https://<your-host>/auth/google/callback`
+4. Put the client id, client secret, public URL, hosted domain, and JWT secret in `.env`.
 
 > **NeuroAI Media Planner System Prompt for Claude**:
 > See [`prompts/neuroai_media_planner_system_prompt.md`](prompts/neuroai_media_planner_system_prompt.md) for full instructions to configure Claude as a conversational OOH Media Planner that digests campaign briefs, evaluates AdMavin metrics, and generates presentations.
 
 ### Cursor IDE MCP Configuration
-Add to `.cursor/mcp.json` or Cursor Settings -> Features -> MCP Servers:
+Add to `.cursor/mcp.json` or Cursor Settings → MCP Servers:
 ```json
 {
   "mcpServers": {
     "media-inventory": {
-      "url": "http://localhost:8090/sse?token=your-secure-mcp-api-key-here"
+      "url": "https://mcp.example.com/mcp"
     }
   }
 }

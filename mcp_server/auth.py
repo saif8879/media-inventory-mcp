@@ -1,48 +1,92 @@
 from __future__ import annotations
 
 import logging
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mcp_server.config import get_settings
+from mcp_server.config import Settings, get_settings
+from mcp_server.oauth.routes import resource_audiences
+from mcp_server.oauth.tokens import TokenRejected, decode_access_token
 
 logger = logging.getLogger("mcp_server.auth")
 
-PUBLIC_PATHS = frozenset({"/health", "/docs", "/openapi.json", "/favicon.ico"})
+PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/docs",
+        "/openapi.json",
+        "/favicon.ico",
+        "/register",
+        "/authorize",
+        "/token",
+        "/auth/google/callback",
+    }
+)
+
+
+def oauth_is_configured(settings: Settings) -> bool:
+    return bool(
+        settings.mcp_public_url.strip()
+        and settings.google_client_id.strip()
+        and settings.google_client_secret.strip()
+        and settings.oauth_jwt_secret.strip()
+        and settings.google_hosted_domain.strip()
+    )
 
 
 class MCPAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Allow open access to monitoring and documentation endpoints
-        if request.url.path in PUBLIC_PATHS:
+        if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/.well-known/oauth-"):
             return await call_next(request)
 
         settings = get_settings()
-        # If no key configured (e.g. open local development), permit request
-        if not settings.mcp_api_key:
-            return await call_next(request)
+        if not oauth_is_configured(settings):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Google OAuth is not configured"},
+            )
 
-        auth_header = request.headers.get("Authorization", "")
-        api_key_header = request.headers.get("X-MCP-Key", "")
-        token_query = request.query_params.get("token", "")
+        token = _bearer_token(request.headers.get("Authorization", ""))
+        if not token:
+            return _unauthorized(settings, "Missing access token")
 
-        extracted_token = ""
-        if auth_header.startswith("Bearer "):
-            extracted_token = auth_header[7:].strip()
-        elif api_key_header:
-            extracted_token = api_key_header.strip()
-        elif token_query:
-            extracted_token = token_query.strip()
-
-        if not extracted_token or extracted_token != settings.mcp_api_key:
+        public = settings.mcp_public_url.rstrip("/")
+        try:
+            claims = decode_access_token(
+                token,
+                secret=settings.oauth_jwt_secret,
+                issuer=public,
+                audiences=resource_audiences(public),
+            )
+        except TokenRejected:
             logger.warning(
                 "unauthorized_mcp_access_attempt",
-                extra={"path": request.url.path, "has_auth_header": bool(auth_header)},
+                extra={"path": request.url.path},
             )
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Unauthorized: Invalid or missing MCP API key"},
-            )
+            return _unauthorized(settings, "Invalid or expired access token")
 
+        hosted = str(claims.get("hd") or "").lower()
+        if hosted != settings.google_hosted_domain.strip().lower():
+            return _unauthorized(settings, "Account is outside the wrap2earn organization")
+
+        request.state.oauth_email = claims.get("email", "")
         return await call_next(request)
+
+
+def _bearer_token(header: str) -> str:
+    if not header.startswith("Bearer "):
+        return ""
+    return header[7:].strip()
+
+
+def _unauthorized(settings: Settings, description: str) -> JSONResponse:
+    metadata = f"{settings.mcp_public_url.rstrip('/')}/.well-known/oauth-protected-resource"
+    return JSONResponse(
+        status_code=401,
+        content={"detail": f"Unauthorized: {description}"},
+        headers={
+            "WWW-Authenticate": f'Bearer error="invalid_token", error_description="{description}", resource_metadata="{metadata}"'
+        },
+    )

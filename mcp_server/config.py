@@ -19,6 +19,17 @@ class Settings(BaseSettings):
     mcp_server_port: int = Field(default=8090, validation_alias="MCP_SERVER_PORT")
     mcp_server_host: str = Field(default="0.0.0.0", validation_alias="MCP_SERVER_HOST")
     mcp_api_key: str = Field(default="", validation_alias="MCP_API_KEY")
+    mcp_public_url: str = Field(default="", validation_alias="MCP_PUBLIC_URL")
+    google_client_id: str = Field(default="", validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str = Field(default="", validation_alias="GOOGLE_CLIENT_SECRET")
+    google_hosted_domain: str = Field(default="wrap2earn.com", validation_alias="GOOGLE_HOSTED_DOMAIN")
+    oauth_jwt_secret: str = Field(default="", validation_alias="OAUTH_JWT_SECRET")
+    oauth_access_token_ttl_seconds: int = Field(
+        default=3600, validation_alias="OAUTH_ACCESS_TOKEN_TTL_SECONDS"
+    )
+    oauth_refresh_token_ttl_seconds: int = Field(
+        default=30 * 24 * 3600, validation_alias="OAUTH_REFRESH_TOKEN_TTL_SECONDS"
+    )
 
     # Database
     database_url: str = Field(..., validation_alias="DATABASE_URL")
