@@ -33,6 +33,7 @@ RUN pip install -r requirements.txt
 
 # Copy application source code
 COPY mcp_server/ mcp_server/
+COPY competitor/ competitor/
 COPY exports/ exports/
 COPY README.md .
 

@@ -14,7 +14,9 @@ logger = logging.getLogger("mcp_server.auth")
 
 PUBLIC_PATHS = frozenset(
     {
+        "/",
         "/health",
+        "/json/version",
         "/docs",
         "/openapi.json",
         "/favicon.ico",

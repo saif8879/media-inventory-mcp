@@ -33,17 +33,19 @@ The server connects AI models directly to the existing Media Inventory database 
      | - get_media_asset             |
      | - find_related_media          |
      | - generate_campaign_deck      |
+     | - find_nearby_competitors     |
+     | - generate_media_plan         |
      +---------------+---------------+
                      |
-  +------------------+------------------+
-  |                                     |
-  v                                     v
-+-----------------------------+   +-----------------------------+
-| PostgreSQL (AWS RDS)        |   | Amazon S3 (Private Bucket)  |
-| - media_inventory           |   | - buzzomni-media-inventory  |
-| - media_inventory_prices    |   | - boto3 presigned URLs      |
-| - admavin_media_inventory   |   | - Time-bounded TTL (900s)   |
-+-----------------------------+   +-----------------------------+
+  +------------------+------------------+------------------+
+  |                                     |                  |
+  v                                     v                  v
++-----------------------------+   +-----------------------------+   +-----------------------------+
+| PostgreSQL (AWS RDS)        |   | Amazon S3 (Private Bucket)  |   | competitor/ JSON exports    |
+| - media_inventory           |   | - buzzomni-media-inventory  |   | - Media Ant outdoor listings|
+| - media_inventory_prices    |   | - boto3 presigned URLs      |   | - lat/lng proximity matching|
+| - admavin_media_inventory   |   | - Time-bounded TTL (900s)   |   |                             |
++-----------------------------+   +-----------------------------+   +-----------------------------+
 ```
 
 ### Key Highlights
@@ -80,6 +82,8 @@ All tools return a standardized response format:
   * `has_image` *(bool, optional)*: Restrict results to records with site photos.
   * `offset` *(int, default: 0)*: Result offset.
   * `limit` *(int, default: 20, max: 100)*: Result limit.
+  * `include_nearby_competitors` *(bool, default: false)*: When true, each result gains its own `nearby_competitors` list.
+  * `competitor_radius_km`, `max_nearby_competitors`, `competitor_media_type`, `competitor_brand`: Used only when competitor enrichment is requested.
 
 ### 2. `get_media_details`
 * **Description**: Retrieve complete details for a single media inventory site by its unique inventory code (e.g. 'MI1', 'MI42') or UUID.
@@ -159,6 +163,34 @@ All tools return a standardized response format:
   }
   ```
 
+### 8. `find_nearby_competitors`
+* **Description**: Find competitor media near one inventory site, or near a latitude/longitude pair when no site is selected. Distances use the Haversine formula and are returned in kilometres. An inventory identifier always uses that site's stored coordinates.
+* **Parameters**:
+  * `identifier` *(string, optional)*: Inventory code such as `"MI1"` or a UUID.
+  * `latitude` / `longitude` *(float, optional)*: Used when `identifier` is empty.
+  * `radius_km` *(float, optional)*: Search radius. Defaults to `COMPETITOR_DEFAULT_RADIUS_KM` (5). Maximum 100.
+  * `limit` *(int, optional)*: Maximum competitor rows. Defaults to `COMPETITOR_MAX_RESULTS` (5). Maximum 50.
+  * `media_type` *(string, optional)*: Competitor media type. `billboard` also matches hoarding and unipole.
+  * `brand` *(string, optional)*: Case-insensitive match against the competitor name, locality, or source.
+* A site with no valid coordinates is returned normally, with `competitor_search.status` set to `skipped_missing_coordinates`.
+
+### 9. `generate_media_plan`
+* **Description**: Build a budget-aware plan from the inventory database. Every recommended site includes its own `nearby_competitors` list. This is always on for media plans. Ordinary `search_media` calls stay unchanged unless `include_nearby_competitors` is true.
+* **Parameters**:
+  * `brand` *(string, required)*: Advertiser the plan is for. This is campaign context, not an inventory-owner filter.
+  * `city` *(string, required)*: City matched case-insensitively against inventory.
+  * `budget` *(float, required)*: Budget in INR. `2000000` is ₹20 lakh.
+  * `media_type` *(string, optional)*: Inventory type. Synonyms are applied, so `billboard` matches `BillBoard` and hoarding-style types.
+  * `objective` *(string, optional)*: Stored on the campaign. It does not invent audience scores.
+  * `query` *(string, optional)*: Extra keyword passed to inventory search.
+  * `radius_km`, `max_competitors`, `competitor_brand`: Same meaning as `find_nearby_competitors`.
+  * `competitor_media_type` *(string, optional)*: A billboard plan leaves this empty and returns every competitor type inside the radius, matched by latitude and longitude. Pass a type such as `bus shelter` to keep only that type. `any` also returns every nearby type.
+  * `max_sites` *(int, optional)*: Maximum recommended sites. Default 10, maximum 25.
+* **Selection**: Priced sites are ordered by recorded monthly reach, highest first, then by lower estimated cost. A site is added while its cost fits the remaining budget. Missing or zero prices are listed in `excluded_inventory` and left out of the spend. Competitor proximity is context on each site; it does not remove a site.
+* **Spend**: `budget_summary.estimated_spend` is the sum of every recommended site's `estimated_cost`.
+
+`search_media` accepts optional `include_nearby_competitors`, `competitor_radius_km`, `max_nearby_competitors`, `competitor_media_type`, and `competitor_brand`. Leave the flag false to preserve the previous response shape.
+
 ---
 
 ## 3. Security & Safety
@@ -205,6 +237,13 @@ cp .env.example .env
 | `AWS_BUCKET` | S3 bucket name | `buzzomni-media-inventory` |
 | `AWS_DEFAULT_REGION` | AWS region | `ap-south-1` |
 | `PRESIGNED_URL_EXPIRY` | Presigned URL duration in seconds | `900` |
+| `COMPETITOR_DATA_DIR` | Directory of competitor JSON exports | `competitor/` |
+| `COMPETITOR_DEFAULT_RADIUS_KM` | Default nearby-competitor radius | `5` |
+| `COMPETITOR_MAX_RESULTS` | Default competitor rows per inventory site | `5` |
+| `COMPETITOR_CACHE_TTL_SECONDS` | How long a parsed competitor file stays cached when it has not changed | `300` |
+| `COMPETITOR_DISTANCE_PRECISION` | Decimal places for `distance_km` | `2` |
+| `MEDIA_PLAN_MAX_CANDIDATES` | Inventory rows considered for one plan | `100` |
+| `MEDIA_PLAN_MAX_SITES` | Default maximum recommended sites | `10` |
 
 ---
 
@@ -377,6 +416,8 @@ Add to `.cursor/mcp.json` or Cursor Settings → MCP Servers:
 * *"Find all media sites within 3 km of site MI12 and tell me their distance."*
 * *"Are there any digital LED screens in Bangalore with audience traffic ratings above 4.0?"*
 * *"Generate a 16:9 widescreen campaign presentation deck in editorial theme for sites MI1 and MI7 for client Nike."*
+* *"Build a media plan for Croma in Mumbai with a ₹20 lakh budget for billboards, and show the competitor media near each recommended site."*
+* *"Which competitor hoardings are within 2 km of inventory site MI12?"*
 
 ---
 
@@ -385,4 +426,6 @@ Add to `.cursor/mcp.json` or Cursor Settings → MCP Servers:
 1. **Read-Only Scope**: In accordance with the safety requirements, write/mutation operations (such as creating inventory sites or modifying rates) are disabled until authorization workflows are specified.
 2. **AdMavin Join**: Correlates `media_inventory` and `admavin_media_inventory` on `(round(latitude, 6), round(longitude, 6), derived_lit)`. Sites without coordinates or without AdMavin sync will display `null` for audience metrics.
 3. **S3 Storage**: Photographic assets are referenced by relative object key (e.g. `media-inventory/MI1/...`). The presigned URL generator returns temporary signed URLs with configurable expiration (default 15 minutes).
+4. **Competitor data**: `competitor/**/*.json` is read as a Media Ant-style export with a `medias` array. Placement coordinates are GeoJSON `[longitude, latitude]`. When those are empty, the loader uses `geos[0].geometry.location`. The export has no advertiser brand field, so `competitor_brand` matches the listing name, locality, and source. `billboard`, `hoarding`, and `unipole` are treated as the same filter; the returned `media_type` stays the value stored in the file.
+5. **Media plan limits**: The planner does not invent rates, reach, or availability. It uses `total_cost` when that value is positive. Otherwise it sums the display, printing, and installation amounts that are present and marks the price as `partial_components`. Sites with no usable price are excluded from the spend. The candidate pool stops at `MEDIA_PLAN_MAX_CANDIDATES`. Selection is a greedy reach-then-cost fill, not a full budget optimizer.
 # media-inventory-mcp

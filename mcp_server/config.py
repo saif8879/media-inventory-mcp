@@ -51,6 +51,23 @@ class Settings(BaseSettings):
     )
     presigned_url_expiry: int = Field(default=900, validation_alias="PRESIGNED_URL_EXPIRY")
 
+    # Competitor proximity and media planning
+    competitor_data_dir: str = Field(default="", validation_alias="COMPETITOR_DATA_DIR")
+    competitor_default_radius_km: float = Field(
+        default=5.0, validation_alias="COMPETITOR_DEFAULT_RADIUS_KM"
+    )
+    competitor_max_results: int = Field(default=5, validation_alias="COMPETITOR_MAX_RESULTS")
+    competitor_cache_ttl_seconds: int = Field(
+        default=300, validation_alias="COMPETITOR_CACHE_TTL_SECONDS"
+    )
+    competitor_distance_precision: int = Field(
+        default=2, validation_alias="COMPETITOR_DISTANCE_PRECISION"
+    )
+    media_plan_max_candidates: int = Field(
+        default=5000, validation_alias="MEDIA_PLAN_MAX_CANDIDATES"
+    )
+    media_plan_max_sites: int = Field(default=10, validation_alias="MEDIA_PLAN_MAX_SITES")
+
 
 @lru_cache
 def get_settings() -> Settings:

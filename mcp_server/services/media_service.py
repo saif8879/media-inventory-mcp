@@ -21,24 +21,11 @@ from mcp_server.models import (
     MediaInventory,
     MediaInventoryPriceHistory,
 )
-
-
-def haversine_distance_km(
-    lat1: float, lon1: float, lat2: float, lon2: float
-) -> float:
-    """Calculate the great circle distance between two points in kilometers."""
-    radius = 6371.0  # Earth's radius in kilometers
-
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2.0) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2.0) ** 2
-    )
-    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-    return radius * c
+from mcp_server.services.geo import (
+    escape_like,
+    haversine_distance_km,
+    media_type_like_patterns,
+)
 
 
 def _to_float(val: Any) -> float | None:
@@ -230,6 +217,7 @@ class MediaInventoryService:
         has_image: bool | None = None,
         offset: int = 0,
         limit: int = 20,
+        media_type_mode: str = "exact",
     ) -> tuple[list[dict[str, Any]], int]:
         admavin_model, join_on = self._build_admavin_join()
         conditions = []
@@ -252,9 +240,25 @@ class MediaInventoryService:
         if city and city.strip():
             conditions.append(func.lower(MediaInventory.city) == city.strip().lower())
         if media_type and media_type.strip():
-            conditions.append(
-                func.lower(MediaInventory.media_type) == media_type.strip().lower()
-            )
+            if media_type_mode == "synonym":
+                patterns = media_type_like_patterns(media_type)
+                conditions.append(
+                    or_(
+                        *[
+                            MediaInventory.media_type.ilike(
+                                f"%{escape_like(pattern)}%",
+                                escape="\\",
+                            )
+                            for pattern in patterns
+                        ]
+                    )
+                )
+            elif media_type_mode == "exact":
+                conditions.append(
+                    func.lower(MediaInventory.media_type) == media_type.strip().lower()
+                )
+            else:
+                raise ValueError(f"Unsupported media_type_mode: {media_type_mode}")
         if media_owner and media_owner.strip():
             conditions.append(
                 func.lower(MediaInventory.media_owner) == media_owner.strip().lower()

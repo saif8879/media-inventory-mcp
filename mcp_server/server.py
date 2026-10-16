@@ -80,7 +80,9 @@ def create_app(
     app.add_middleware(MCPAuthMiddleware)
     register_oauth_routes(app, settings, oauth_store, google_login)
 
-    # Health check endpoint
+    # Health check endpoint. "/" and "/json/version" are public so a browser
+    # probe does not come back as an unauthorized MCP call.
+    @app.get("/")
     @app.get("/health")
     async def health():
         return {
@@ -95,8 +97,14 @@ def create_app(
                 "get_media_asset",
                 "find_related_media",
                 "generate_campaign_deck",
+                "find_nearby_competitors",
+                "generate_media_plan",
             ],
         }
+
+    @app.get("/json/version")
+    async def browser_probe():
+        return {"status": "ok", "service": "media-inventory-mcp"}
 
     # SSE stays available for older clients. Streamable HTTP on /mcp is what
     # Claude custom connectors call with POST.

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mcp_server.tools.find_nearby_competitors import find_nearby_competitors_handler
 from mcp_server.tools.find_related_media import find_related_media_handler
 from mcp_server.tools.generate_campaign_deck import generate_campaign_deck_handler
+from mcp_server.tools.generate_media_plan import generate_media_plan_handler
 from mcp_server.tools.get_media_asset import get_media_asset_handler
 from mcp_server.tools.get_media_details import get_media_details_handler
 from mcp_server.tools.get_media_statistics import get_media_statistics_handler
@@ -22,7 +24,10 @@ def register_tools(server: MCPServer) -> None:
         description=(
             "Search OOH media inventory (billboards, unipoles, gantries, bus shelters) "
             "by keyword query, city, media type, concessionaire/owner, cost bounds, "
-            "and audience metrics (reach, OTS). Returns paginated summary records."
+            "and audience metrics (reach, OTS). Returns paginated summary records. "
+            "Set include_nearby_competitors to true to attach competitor media within "
+            "competitor_radius_km of each result, using the site latitude and longitude. "
+            "Omit that flag to keep the original inventory response."
         ),
     )
     async def search_media(
@@ -37,6 +42,11 @@ def register_tools(server: MCPServer) -> None:
         has_image: bool | None = None,
         offset: int = 0,
         limit: int = 20,
+        include_nearby_competitors: bool = False,
+        competitor_radius_km: float | None = None,
+        max_nearby_competitors: int | None = None,
+        competitor_media_type: str = "",
+        competitor_brand: str = "",
     ) -> str:
         return await search_media_handler(
             query=query,
@@ -50,6 +60,11 @@ def register_tools(server: MCPServer) -> None:
             has_image=has_image,
             offset=offset,
             limit=limit,
+            include_nearby_competitors=include_nearby_competitors,
+            competitor_radius_km=competitor_radius_km,
+            max_nearby_competitors=max_nearby_competitors,
+            competitor_media_type=competitor_media_type,
+            competitor_brand=competitor_brand,
         )
 
     @server.tool(
@@ -189,4 +204,74 @@ def register_tools(server: MCPServer) -> None:
             include_commercials=include_commercials,
             include_audience_metrics=include_audience_metrics,
             expires_in=expires_in,
+        )
+
+    @server.tool(
+        name="find_nearby_competitors",
+        description=(
+            "Find competitor media placements near one inventory site or a latitude/longitude "
+            "pair. Distance uses the Haversine formula in kilometres. When identifier is "
+            "supplied, the site's stored coordinates are used. A site without coordinates is "
+            "returned with competitor matching marked unavailable. This does not search the "
+            "agency's own inventory; use find_related_media for that."
+        ),
+    )
+    async def find_nearby_competitors(
+        identifier: str = "",
+        latitude: float | None = None,
+        longitude: float | None = None,
+        radius_km: float | None = None,
+        limit: int | None = None,
+        media_type: str = "",
+        brand: str = "",
+    ) -> str:
+        return await find_nearby_competitors_handler(
+            identifier=identifier,
+            latitude=latitude,
+            longitude=longitude,
+            radius_km=radius_km,
+            limit=limit,
+            media_type=media_type,
+            brand=brand,
+        )
+
+    @server.tool(
+        name="generate_media_plan",
+        description=(
+            "Generate a budget-aware OOH media plan from the inventory database and attach "
+            "nearby competitor media to every recommended site. budget is INR (2000000 for "
+            "₹20 lakh). media_type is optional and matches synonyms such as billboard and "
+            "hoarding. Competitor analysis is always included: each recommended site has its "
+            "own nearby_competitors list, coordinates, and distance_km. A billboard request "
+            "returns every nearby competitor type inside the radius, matched by latitude and "
+            "longitude. Pass competitor_media_type only to restrict competitors to one type. "
+            "Sites with no coordinates stay in the plan and explain that competitor matching "
+            "is unavailable."
+        ),
+    )
+    async def generate_media_plan(
+        brand: str,
+        city: str,
+        budget: float,
+        media_type: str = "",
+        objective: str = "",
+        query: str = "",
+        radius_km: float | None = None,
+        max_competitors: int | None = None,
+        competitor_media_type: str = "",
+        competitor_brand: str = "",
+        max_sites: int | None = None,
+    ) -> str:
+        return await generate_media_plan_handler(
+            brand=brand,
+            city=city,
+            budget=budget,
+            media_type=media_type,
+            objective=objective,
+            query=query,
+            radius_km=radius_km,
+            max_competitors=max_competitors,
+            competitor_media_type=competitor_media_type,
+            competitor_brand=competitor_brand,
+            max_sites=max_sites,
         )

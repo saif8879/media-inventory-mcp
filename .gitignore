@@ -14,6 +14,16 @@
 # Whitelist mcp_server source package
 !mcp_server/
 
+# Whitelist automated tests
+!tests/
+!pytest.ini
+
+# Whitelist the media-plan skill only
+!.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
+
 # Ignore Python bytecode and local artifacts everywhere
 __pycache__/
 *.py[cod]
